@@ -1,5 +1,13 @@
-# Human Face Detection [[中文]](./README_cn.md)
+# Face Detect ++ IDA Embedded workshop
 
+After check out make sure to update components/esp-camera submodule
+
+```
+git submodule update --init --recursive
+```
+
+The code base has added live image capture on M5STACK timer camera module and websocket for process monitoring.  
+ 
 This project is an example of human face detection interface. The input to this interface is a static image. The detection results are confidence scores and coordinate values shown in Terminal, which can be converted by a tool into an image shown on your PC screen.
 
 Below is the structure of this project:
