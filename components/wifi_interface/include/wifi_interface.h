@@ -26,4 +26,6 @@ void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id,
 
 void wifi_init_sta(void);
 
+void wifi_init_socket(void);
 
+void wifi_send_image(uint8_t* data, uint size, uint8_t* meta, uint m_size);

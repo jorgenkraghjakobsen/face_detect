@@ -10,9 +10,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+//#include "freertos/ringbuf.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "wifi_interface.h"
+#include "lwip/err.h"
+#include "lwip/sys.h"
+#include "lwip/sockets.h"
+
+#include "ota_server.h"
+
+xTaskHandle t_tcp_client_task;
 
 static const char* TAG = "WIFI";
 
@@ -119,4 +128,138 @@ void wifi_init_sta(void) {
   // ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP,
   // &event_handler)); ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT,
   // ESP_EVENT_ANY_ID, &event_handler)); vEventGroupDelete(s_wifi_event_group);
+
+  ESP_LOGI(TAG,"Connected");
+
+  // Setup OTA server 
+  xTaskCreate(&ota_server_task, "ota_server_task", 4096, NULL, 15, NULL);
 }
+
+
+// Websocket interface 
+void tcp_client_task(void *pvParameters);
+
+void wifi_init_socket() { 
+    xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 7, &t_tcp_client_task);
+}   
+//#define HOST_IP_ADDR CONFIG_SOCKET_ADDRESS
+#define PORT 3333
+
+extern uint8_t *wifi_image_buffer; 
+
+SemaphoreHandle_t sem;
+int image_size = 0; 
+extern uint8_t *meta ; 
+int meta_size = 0; 
+
+
+#define BUFFER_SIZE 640*480
+void tcp_client_task(void *pvParameters)
+{
+    char rx_buffer[128];
+    char host_ip[] = CONFIG_SOCKET_ADDRESS;
+    int addr_family = 0;
+    int ip_protocol = 0;
+    
+    ESP_LOGI(TAG,"Allocate memory in SPRAM");
+    wifi_image_buffer = (uint8_t *)heap_caps_malloc(
+              sizeof(uint8_t) * BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    meta = (uint8_t*)malloc(sizeof(uint8_t) * 8 * 4); 
+    
+    //Float predition             : 1 x u32_t
+    //Bounding box (lr,ll, ur,rl) : 2 x u32_t 
+    //Eyes, Nose, Mounth          : 5 x u32_t 
+
+    sem = xSemaphoreCreateMutex();
+    while (1) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(host_ip);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+        
+        char msg[8] ; 
+            
+        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
+
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
+        if (err != 0) {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Successfully connected");
+        vTaskDelay(2000 / portTICK_PERIOD_MS); 
+        ESP_LOGI(TAG, "Waited 2 sec to start event loop");
+        
+        while (1) {
+            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            if (len < 0) {
+                ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                break;
+            } else {
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+                ESP_LOGI(TAG, "%s", rx_buffer);
+            }
+            if ((rx_buffer[0] == 1) & (rx_buffer[1] == 1)){    //Return Image from buffer 
+                xSemaphoreTake(sem, portMAX_DELAY);
+                uint32_t size = image_size;
+                
+                msg[0] = 1;      // Raw message_type 
+                msg[1] = (size & 0x00ff0000)>>16;
+                msg[2] = (size & 0x0000ff00)>>8;
+                msg[3] = (size & 0x000000ff);
+                size = meta_size;  
+                msg[4] = 0;      // Meta size  
+                msg[5] = (size & 0x00ff0000)>>16;
+                msg[6] = (size & 0x0000ff00)>>8;
+                msg[7] = (size & 0x000000ff);
+                send(sock, msg, 8, 0);
+                if (size > 0) {  
+                  send(sock, meta, size, 0);
+                } 
+                err = send(sock, wifi_image_buffer, image_size, 0);
+                xSemaphoreGive(sem);
+            } else {
+                ESP_LOGI(TAG, "Socket command not understood");  
+            }
+            if (err < 0) {
+                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                break;
+            }
+        }
+
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+void wifi_send_image(uint8_t* data, uint size,uint8_t* m, uint m_size ) {
+   ESP_LOGI(TAG,"Copy image to local buffer");
+   ESP_LOGI(TAG,"Image compact size : %d",size);
+   ESP_LOGI(TAG,"Meta size          : %d",m_size);
+   
+   xSemaphoreTake(sem, portMAX_DELAY);
+   memcpy(wifi_image_buffer,data,size);
+   image_size = size;
+   meta_size = m_size;
+   if (m_size > 0) {
+     memcpy(meta,m,m_size); 
+   }
+   xSemaphoreGive(sem);
+   ESP_LOGI(TAG,"Done");
+   ESP_LOGI(TAG,"--------------------------------------------------------------------------------------------");
+}
+
+
+

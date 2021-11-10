@@ -13,7 +13,7 @@ set(include_dirs    .
                     ../../esp-dl/include/detect
                     ../../esp-dl/include/model_zoo)
 
-set(requires        wifi_interface )
+set(requires        wifi_interface camera_interface )
 
 idf_component_register(SRCS ${srcs} INCLUDE_DIRS ${include_dirs} REQUIRES ${requires})
 

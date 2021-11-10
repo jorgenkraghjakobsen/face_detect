@@ -17,4 +17,11 @@ menu "Wifi Configuration"
         default 5
         help
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+
+    config SOCKET_ADDRESS
+        string "Socket address images and meta data (port 3333)"
+        default "192.168.1.155"
+        help
+            Typical your laptop ip address.
+
 endmenu
